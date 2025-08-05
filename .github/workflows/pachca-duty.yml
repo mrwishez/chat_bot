@@ -13,7 +13,7 @@ jobs:
       - name: Проверка переменных
         run: |
           [ -n "${{ vars.DUTY_SHEET_CSV_URL }}" ] || { echo "DUTY_SHEET_CSV_URL не задан"; exit 1; }
-          [ -n "${{ secrets.PACHCA_WEBHOOK_URL }}" ] || { echo "PACHCA_WEBHOOK_URL не задан"; exit 1; }
+          [ -n "${{ secrets.PACHCA_SECRETARY_URL }}" ] || { echo "PACHCA_SECRETARY_URL не задан"; exit 1; }
 
       - name: Определить дежурного
         id: who
@@ -68,7 +68,7 @@ jobs:
 
       - name: Отправить сообщение в Пачку
         env:
-          WEBHOOK_URL: ${{ secrets.PACHCA_WEBHOOK_URL }}
+          WEBHOOK_URL: ${{ secrets.PACHCA_SECRETARY_URL }}
           NAME: ${{ steps.who.outputs.name }}
           TAG: ${{ steps.who.outputs.tag }}
         run: |
