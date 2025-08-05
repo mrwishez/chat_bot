@@ -1,0 +1,79 @@
+name: Pachca Weekly Duty
+
+on:
+  schedule:
+    # Понедельник 08:00 МСК = 05:00 UTC
+    - cron: '0 5 * * 1'
+  workflow_dispatch: {}  # чтобы можно было запускать вручную
+
+jobs:
+  duty:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Проверка переменных
+        run: |
+          [ -n "${{ vars.DUTY_SHEET_CSV_URL }}" ] || { echo "DUTY_SHEET_CSV_URL не задан"; exit 1; }
+          [ -n "${{ secrets.PACHCA_WEBHOOK_URL }}" ] || { echo "PACHCA_WEBHOOK_URL не задан"; exit 1; }
+
+      - name: Определить дежурного
+        id: who
+        env:
+          CSV_URL: ${{ vars.DUTY_SHEET_CSV_URL }}
+          ANCHOR_DATE: ${{ vars.ANCHOR_DATE }}
+        run: |
+          python3 - <<'PY'
+          import os, csv, io, sys
+          from urllib.request import urlopen
+          from datetime import datetime, timedelta, date
+          from zoneinfo import ZoneInfo
+
+          csv_url = os.environ["CSV_URL"]
+          anchor = os.environ.get("ANCHOR_DATE", "").strip()
+
+          data = urlopen(csv_url).read().decode("utf-8")
+          rows = list(csv.DictReader(io.StringIO(data)))
+
+          people = []
+          for r in rows:
+            name = (r.get("name") or r.get("Name") or r.get("имя") or r.get("Имя") or "").strip()
+            tag  = (r.get("tag")  or r.get("Tag")  or r.get("тег") or r.get("Тег") or "").strip()
+            if name and tag:
+              if not tag.startswith("@"):
+                tag = "@"+tag
+              people.append((name, tag))
+
+          if not people:
+            print("::error::В таблице нет валидных строк (нужны колонки 'name' и 'tag')"); sys.exit(1)
+
+          now = datetime.now(ZoneInfo("Europe/Moscow"))
+          monday_today = (now - timedelta(days=now.weekday())).date()
+
+          if anchor:
+            try:
+              anchor_date = date.fromisoformat(anchor)
+            except Exception:
+              print("::error::ANCHOR_DATE должен быть в формате YYYY-MM-DD (понедельник)"); sys.exit(1)
+          else:
+            # по умолчанию: начнём с первой строки на текущей неделе
+            anchor_date = monday_today
+
+          weeks = (monday_today - anchor_date).days // 7
+          idx = weeks % len(people)
+          name, tag = people[idx]
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write(f"name={name}\n")
+            f.write(f"tag={tag}\n")
+          PY
+
+      - name: Отправить сообщение в Пачку
+        env:
+          WEBHOOK_URL: ${{ secrets.PACHCA_WEBHOOK_URL }}
+          NAME: ${{ steps.who.outputs.name }}
+          TAG: ${{ steps.who.outputs.tag }}
+        run: |
+          BODY=$(python3 -c 'import os,json; print(json.dumps({"message": f"На этой неделе дежурит {os.environ.get(\"NAME\")} {os.environ.get(\"TAG\")}"}, ensure_ascii=False))')
+          curl --fail --show-error --silent \
+               -H "Content-Type: application/json" \
+               -X POST "$WEBHOOK_URL" \
+               -d "$BODY"
