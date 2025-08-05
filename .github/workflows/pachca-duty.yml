@@ -68,7 +68,7 @@ jobs:
 
       - name: Отправить сообщение в Пачку
         env:
-          WEBHOOK_URL: ${{ secrets.PACHCA_WEBHOOK_URL }}
+          WEBHOOK_URL: ${{ secrets.PACHCA_SECRETARY_URL  }}
           NAME: ${{ steps.who.outputs.name }}
           TAG: ${{ steps.who.outputs.tag }}
         run: |
