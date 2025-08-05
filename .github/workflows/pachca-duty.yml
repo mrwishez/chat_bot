@@ -72,11 +72,8 @@ jobs:
           NAME: ${{ steps.who.outputs.name }}
           TAG: ${{ steps.who.outputs.tag }}
         run: |
-          BODY=$(python3 -c "import os,json; 
-      from os import environ as e
-      print(json.dumps({'message': 'На этой неделе дежурит {} {}'.format(e.get('NAME',''), e.get('TAG',''))}, ensure_ascii=False))")
+          BODY=$(python3 -c "import os,json; print(json.dumps({'message': 'На этой неделе дежурит ' + os.environ.get('NAME','') + ' ' + os.environ.get('TAG','')}, ensure_ascii=False))")
           curl --fail --show-error --silent \
-         -H "Content-Type: application/json" \
-         -X POST "$WEBHOOK_URL" \
-         -d "$BODY"
-
+           -H "Content-Type: application/json" \
+           -X POST "$WEBHOOK_URL" \
+           -d "$BODY"
