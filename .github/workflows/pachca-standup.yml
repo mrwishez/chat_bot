@@ -9,7 +9,7 @@ on:
       message:
         description: 'Текст сообщения'
         required: false
-        default: 'Встречаемся на дейли через 5 минут!'
+        default: 'Встречаемся на дейли через 5 минут! Ссылка на подключение: https://ideco.ktalk.ru/releaseteam'
 
 jobs:
   send:
@@ -27,7 +27,7 @@ jobs:
           MESSAGE: "${{ github.event.inputs.message }}"
         run: |
           # Если запустили по расписанию, MESSAGE будет пустая — зададим дефолт.
-          : "${MESSAGE:= Встречаемся на дейли через 5 минут!}"
+          : "${MESSAGE:= Встречаемся на дейли через 5 минут! Ссылка на подключение: https://ideco.ktalk.ru/releaseteam}"
           # Собираем JSON одной командой Python (без heredoc и jq)
           BODY=$(python3 -c 'import json,os; print(json.dumps({"message": os.environ["MESSAGE"]}, ensure_ascii=False))')
           curl --fail --show-error --silent \
