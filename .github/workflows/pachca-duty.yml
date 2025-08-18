@@ -1,79 +1,95 @@
+# .github/workflows/pachca-weekly-duty.yml
 name: Pachca Weekly Duty
 
 on:
   schedule:
     # Понедельник 08:00 МСК = 05:00 UTC
     - cron: '0 5 * * 1'
-  workflow_dispatch: {}  # чтобы можно было запускать вручную
+  workflow_dispatch: {}  # ручной запуск для теста
 
 jobs:
   duty:
     runs-on: ubuntu-latest
     steps:
-      - name: Проверка переменных
+      - name: Проверка секрета вебхука
         run: |
-          [ -n "${{ vars.DUTY_SHEET_CSV_URL }}" ] || { echo "DUTY_SHEET_CSV_URL не задан"; exit 1; }
           [ -n "${{ secrets.PACHCA_SECRETARY_URL }}" ] || { echo "PACHCA_SECRETARY_URL не задан"; exit 1; }
 
-      - name: Определить дежурного
+      - name: Определить дежурного из Google Sheets
         id: who
         env:
-          CSV_URL: ${{ vars.DUTY_SHEET_CSV_URL }}
-          ANCHOR_DATE: ${{ vars.ANCHOR_DATE }}
+          # CSV-экспорт твоей таблицы (первый лист). Если лист не первый, поменяй gid.
+          CSV_URL: "https://docs.google.com/spreadsheets/d/1OuZ2BMwOQhKimJ5aenuKHQZ9f-MhBKdnlkIofqUv8u8/export?format=csv&gid=0"
+
+          # Опорный понедельник, при котором 1-я строка списка = та неделя.
+          # Поставлено 2025-08-11, чтобы 2025-08-25 была 3-й строкой (Истомина).
+          ANCHOR_DATE: "2025-08-11"
         run: |
           python3 - <<'PY'
-          import os, csv, io, sys
-          from urllib.request import urlopen
+          import os, csv, io, sys, json
+          from urllib.request import urlopen, Request
           from datetime import datetime, timedelta, date
           from zoneinfo import ZoneInfo
 
           csv_url = os.environ["CSV_URL"]
-          anchor = os.environ.get("ANCHOR_DATE", "").strip()
-
-          data = urlopen(csv_url).read().decode("utf-8")
+          # грузим CSV (нужен публичный доступ "Опубликовать в интернете" или доступ по ссылке)
+          req = Request(csv_url, headers={"User-Agent":"Mozilla/5.0"})
+          data = urlopen(req, timeout=20).read().decode("utf-8")
           rows = list(csv.DictReader(io.StringIO(data)))
 
+          # собираем список (name, tag)
           people = []
           for r in rows:
-            name = (r.get("name") or r.get("Name") or r.get("имя") or r.get("Имя") or "").strip()
-            tag  = (r.get("tag")  or r.get("Tag")  or r.get("тег") or r.get("Тег") or "").strip()
-            if name and tag:
-              if not tag.startswith("@"):
-                tag = "@"+tag
-              people.append((name, tag))
+            name = (r.get("name") or r.get("Name") or "").strip()
+            tag  = (r.get("tag")  or r.get("Tag")  or "").strip()
+            if not name and not tag:
+              continue
+            if tag and not tag.startswith("@"):
+              tag = "@"+tag
+            people.append((name, tag))
 
           if not people:
-            print("::error::В таблице нет валидных строк (нужны колонки 'name' и 'tag')"); sys.exit(1)
+            print("::error::В таблице нет валидных строк (нужны колонки 'name' и 'tag').")
+            sys.exit(1)
 
+          # вычисляем текущий понедельник по МСК
           now = datetime.now(ZoneInfo("Europe/Moscow"))
           monday_today = (now - timedelta(days=now.weekday())).date()
 
-          if anchor:
-            try:
-              anchor_date = date.fromisoformat(anchor)
-            except Exception:
-              print("::error::ANCHOR_DATE должен быть в формате YYYY-MM-DD (понедельник)"); sys.exit(1)
-          else:
-            # по умолчанию: начнём с первой строки на текущей неделе
-            anchor_date = monday_today
+          # опорная дата: 2025-08-11 => 2025-08-25 даст индекс 2 (третья строка)
+          try:
+            anchor_date = date.fromisoformat(os.environ.get("ANCHOR_DATE","").strip())
+          except Exception:
+            anchor_date = date(2025,8,11)
 
           weeks = (monday_today - anchor_date).days // 7
+          if weeks < 0:
+            weeks = 0  # если опорная дата случайно в будущем
           idx = weeks % len(people)
-          name, tag = people[idx]
 
+          name, tag = people[idx]
+          # пробрасываем в outputs
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
             f.write(f"name={name}\n")
             f.write(f"tag={tag}\n")
+            f.write(f"idx={idx}\n")
+            f.write(f"monday_today={monday_today}\n")
           PY
 
       - name: Отправить сообщение в Пачку
         env:
-          WEBHOOK_URL: ${{ secrets.PACHCA_SECRETARY_URL  }}
+          WEBHOOK_URL: ${{ secrets.PACHCA_SECRETARY_URL }}
           NAME: ${{ steps.who.outputs.name }}
           TAG: ${{ steps.who.outputs.tag }}
         run: |
           BODY=$(python3 -c "import os,json; print(json.dumps({'message': 'На этой неделе дежурит ' + os.environ.get('NAME','') + ' ' + os.environ.get('TAG','')}, ensure_ascii=False))")
           curl --fail --show-error --silent \
-           -H "Content-Type: application/json" \
-           -X POST "$WEBHOOK_URL" \
-           -d "$BODY"
+            -H "Content-Type: application/json" \
+            -X POST "$WEBHOOK_URL" \
+            -d "$BODY"
+
+      # Полезный лог для проверки индекса и дат
+      - name: Debug info (optional)
+        run: |
+          echo "INDEX: ${{ steps.who.outputs.idx }}"
+          echo "MONDAY_TODAY(ru-MS K): ${{ steps.who.outputs.monday_today }}"
