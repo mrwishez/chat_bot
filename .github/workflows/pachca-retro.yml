@@ -1,5 +1,5 @@
 # .github/workflows/pachca-retro-biweekly.yml
-name: Pachca Retro (biweekly Mon 14:00 MSK, buffered)
+name: Pachca Retro (biweekly Mon 12:00 MSK, buffered)
 
 on:
   schedule:
