@@ -1,36 +1,49 @@
-name: Pachca Standup Reminder
+# .github/workflows/pachca-retro-biweekly.yml
+name: Pachca Retro (biweekly Mon 14:00 MSK, buffered)
 
 on:
   schedule:
-    # 11:00 МСК = 08:00 UTC
-    - cron: '55 6 * * 1-5'
-  workflow_dispatch:
-    inputs:
-      message:
-        description: 'Текст сообщения'
-        required: false
-        default: 'Встречаемся на дейли через 5 минут! Ссылка на подключение: https://ideco.ktalk.ru/releaseteam'
+    # 13:55 МСК = 10:55 UTC (каждый понедельник)
+    - cron: '0 8 * * 1'
+  workflow_dispatch: {}
 
 jobs:
-  send:
+  retro:
     runs-on: ubuntu-latest
+    env:
+      WEBHOOK_URL: ${{ secrets.PACHCA_RETRO_URL }}       # вебхук Пачки для ретро
+      RETRO_TIME: "12:00 МСК"
+      ANCHOR_MONDAY: "2025-09-01"                        # понедельник первой ретро-недели
     steps:
       - name: Проверка секрета
         run: |
-          if [ -z "${{ secrets.PACHCA_WEBHOOK_URL }}" ]; then
-            echo "Secret PACHCA_WEBHOOK_URL не задан"; exit 1
-          fi
+          [ -n "$WEBHOOK_URL" ] || { echo "PACHCA_RETRO_URL не задан"; exit 1; }
 
-      - name: Отправить уведомление в Пачку
-        env:
-          WEBHOOK_URL: ${{ secrets.PACHCA_WEBHOOK_URL }}
-          MESSAGE: "${{ github.event.inputs.message }}"
+      - name: Проверить чётность недели и отправить
         run: |
-          # Если запустили по расписанию, MESSAGE будет пустая — зададим дефолт.
-          : "${MESSAGE:= Встречаемся на дейли через 5 минут! Ссылка на подключение: https://ideco.ktalk.ru/releaseteam}"
-          # Собираем JSON одной командой Python (без heredoc и jq)
-          BODY=$(python3 -c 'import json,os; print(json.dumps({"message": os.environ["MESSAGE"]}, ensure_ascii=False))')
+          python3 - <<'PY'
+          import os, json
+          from datetime import datetime, timedelta, date, timezone
+
+          # МСК как UTC+3 (без переходов)
+          now_utc = datetime.now(timezone.utc)
+          msk = now_utc + timedelta(hours=3)
+          # текущий понедельник (МСК)
+          monday = (msk.date() - timedelta(days=msk.weekday()))
+          # опорный понедельник
+          anchor = date.fromisoformat(os.environ["ANCHOR_MONDAY"])
+          weeks = (monday - anchor).days // 7
+          if weeks < 0 or weeks % 2 != 0:
+              print("Not a retro week, skip.")
+              raise SystemExit(0)
+
+          msg = f"@ReleaseTeam Сегодня ретро в 14:00 ЕКБ, пришло время повспоминать чем хотелось бы поделиться, ссылка на доску: https://unidraw.io/app/board/25be0ac5c3cebcef471a?elementId=ah6ZCbHO8vzu_qrMQSC5- Ссылка на подключение: https://ideco.ktalk.ru/releaseteam"
+          body = json.dumps({"message": msg}, ensure_ascii=False)
+          print(body)
+          open("body.json","w", encoding="utf-8").write(body)
+          PY
+
           curl --fail --show-error --silent \
-               -H "Content-Type: application/json" \
-               -X POST "$WEBHOOK_URL" \
-               -d "$BODY"
+            -H "Content-Type: application/json" \
+            -X POST "$WEBHOOK_URL" \
+            --data-binary @body.json
