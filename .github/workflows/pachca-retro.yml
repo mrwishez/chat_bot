@@ -4,7 +4,7 @@ name: Pachca Retro (biweekly Mon 14:00 MSK)
 on:
   schedule:
     # 14:00 МСК = 11:00 UTC
-    - cron: '0 8 * * 1'
+    - cron: '0 11 * * 1'
   workflow_dispatch: {}
 
 jobs:
@@ -13,6 +13,7 @@ jobs:
     env:
       WEBHOOK_URL: ${{ secrets.PACHCA_WEBHOOK_URL }}   # входящий вебхук Пачки
       ANCHOR_MONDAY: '2025-09-01'                      # понедельник первой ретро-недели
+      MSG: "@ReleaseTeam Сегодня ретро в 16:00 ЕКБ, пришло время повспоминать чем хотелось бы поделиться, ссылка на доску: https://unidraw.io/app/board/25be0ac5c3cebcef471a?elementId=ah6ZCbHO8vzu_qrMQSC5- Ссылка на подключение: https://ideco.ktalk.ru/releaseteam"
 
     steps:
       - name: Проверка секрета
@@ -21,51 +22,22 @@ jobs:
             echo "PACHCA_WEBHOOK_URL не задан"; exit 1;
           fi
 
-      - name: Решить, слать ли, и (если нужно) создать body.json
+      - name: Решить, ретро-неделя ли сейчас
         id: plan
         run: |
-          python3 - <<'PY'
-          import os, json
-          from datetime import datetime, timedelta, date, timezone
+          python3 -c "import os,sys; from datetime import datetime,timedelta,date,timezone; \
+now=datetime.now(timezone.utc); msk=now+timedelta(hours=3); monday=(msk.date()-timedelta(days=msk.weekday())); \
+anchor=date.fromisoformat(os.environ['ANCHOR_MONDAY']); weeks=(monday-anchor).days//7; \
+should=int(weeks>=0 and weeks%2==0); open(os.environ['GITHUB_OUTPUT'],'a').write(f'should_send={should}\n')"
 
-          # Текущее время в МСК (UTC+3, без переходов)
-          now_utc = datetime.now(timezone.utc)
-          msk = now_utc + timedelta(hours=3)
-
-          # Текущий понедельник (МСК)
-          monday = msk.date() - timedelta(days=msk.weekday())
-
-          # Опорный понедельник
-          anchor = date.fromisoformat(os.environ['ANCHOR_MONDAY'])
-
-          # Номер недели от опоры
-          weeks = (monday - anchor).days // 7
-
-          # Ретро-неделя: чётность по 2 неделям от anchor
-          should_send = int(weeks >= 0 and weeks % 2 == 0)
-
-          if should_send:
-              msg = ("@ReleaseTeam Сегодня ретро в 16:00 ЕКБ, пришло время повспоминать чем хотелось бы поделиться, "
-                     "ссылка на доску: https://unidraw.io/app/board/25be0ac5c3cebcef471a?elementId=ah6ZCbHO8vzu_qrMQSC5- "
-                     "Ссылка на подключение: https://ideco.ktalk.ru/releaseteam")
-              with open('body.json', 'w', encoding='utf-8') as f:
-                  json.dump({'message': msg}, f, ensure_ascii=False)
-              print('Retro week: will send.')
-          else:
-              print('Not a retro week, skip.')
-
-          # Прокинем флаг в outputs
-          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
-              f.write(f'should_send={should_send}\n')
-          PY
-
-      - name: Отправить сообщение в Пачку
+      - name: Отправить сообщение в Пачку (только на ретро-неделе)
         if: steps.plan.outputs.should_send == '1'
         run: |
+          BODY=$(python3 -c "import os,json; print(json.dumps({'message': os.environ['MSG']}, ensure_ascii=False))")
           curl --fail --show-error --silent \
             -H "Content-Type: application/json" \
             -X POST "$WEBHOOK_URL" \
-            --data-binary @body.json
+            -d "$BODY"
 
       - name: Пропуск (не ретро-неделя)
         if: steps.plan.outputs.should_send != '1'
