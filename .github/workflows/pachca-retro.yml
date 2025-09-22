@@ -1,5 +1,5 @@
 # .github/workflows/pachca-retro-biweekly.yml
-name: Pachca Retro (biweekly Mon 12:00 MSK, buffered)
+name: Pachca Retro (biweekly Mon 14:00 MSK, buffered)
 
 on:
   schedule:
@@ -11,15 +11,12 @@ jobs:
   retro:
     runs-on: ubuntu-latest
     env:
-      WEBHOOK_URL: ${{ secrets.PACHCA_WEBHOOK_URL }}       # вебхук Пачки для ретро
-      RETRO_TIME: "14:00 МСК"
-      ANCHOR_MONDAY: "2025-09-01"                        # понедельник первой ретро-недели
+      WEBHOOK_URL: ${{ secrets.PACHCA_RETRO_URL }}  # твой вебхук Пачки
+      RETRO_TIME: "14:00 МСК"                      # для текста (опц.)
+      ANCHOR_MONDAY: "2025-09-01"                  # опорный понедельник ретро-недели
     steps:
-      - name: Проверка секрета
-        run: |
-          [ -n "$WEBHOOK_URL" ] || { echo "PACHCA_WEBHOOK_URL не задан"; exit 1; }
-
-      - name: Проверить чётность недели и отправить
+      - name: Решить, нужно ли слать, и (если нужно) собрать body.json
+        id: plan
         run: |
           python3 - <<'PY'
           import os, json
@@ -28,22 +25,39 @@ jobs:
           # МСК как UTC+3 (без переходов)
           now_utc = datetime.now(timezone.utc)
           msk = now_utc + timedelta(hours=3)
+
           # текущий понедельник (МСК)
           monday = (msk.date() - timedelta(days=msk.weekday()))
           # опорный понедельник
           anchor = date.fromisoformat(os.environ["ANCHOR_MONDAY"])
           weeks = (monday - anchor).days // 7
-          if weeks < 0 or weeks % 2 != 0:
-              print("Not a retro week, skip.")
-              raise SystemExit(0)
 
-          msg = f"@ReleaseTeam Сегодня ретро в 16:00 ЕКБ, пришло время повспоминать чем хотелось бы поделиться, ссылка на доску: https://unidraw.io/app/board/25be0ac5c3cebcef471a?elementId=ah6ZCbHO8vzu_qrMQSC5- Ссылка на подключение: https://ideco.ktalk.ru/releaseteam"
-          body = json.dumps({"message": msg}, ensure_ascii=False)
-          print(body)
-          open("body.json","w", encoding="utf-8").write(body)
+          # ретро-неделя = чётность по 2 неделям от anchor
+          should_send = int(weeks >= 0 and weeks % 2 == 0)
+
+          if should_send:
+              msg = "@ReleaseTeam Сегодня ретро в 16:00 ЕКБ, пришло время повспоминать чем хотелось бы поделиться, " \
+                    "ссылка на доску: https://unidraw.io/app/board/25be0ac5c3cebcef471a?elementId=ah6ZCbHO8vzu_qrMQSC5- " \
+                    "Ссылка на подключение: https://ideco.ktalk.ru/releaseteam"
+              with open("body.json","w", encoding="utf-8") as f:
+                  f.write(json.dumps({"message": msg}, ensure_ascii=False))
+              print("Retro week: will send.")
+          else:
+              print("Not a retro week, skip.")
+
+          # прокинем флаг в outputs
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"should_send={should_send}\n")
           PY
 
+      - name: Отправить сообщение в Пачку
+        if: steps.plan.outputs.should_send == '1'
+        run: |
           curl --fail --show-error --silent \
             -H "Content-Type: application/json" \
             -X POST "$WEBHOOK_URL" \
             --data-binary @body.json
+
+      - name: Пропуск (не ретро-неделя)
+        if: steps.plan.outputs.should_send != '1'
+        run: echo "Skip: not a retro week. Job finishes successfully."
