@@ -11,7 +11,7 @@ jobs:
   retro:
     runs-on: ubuntu-latest
     env:
-      WEBHOOK_URL: ${{ secrets.PACHCA_RETRO_URL }}  # твой вебхук Пачки
+      WEBHOOK_URL: ${{ secrets.PACHCA_WEBHOOK_URL }}  # твой вебхук Пачки
       RETRO_TIME: "14:00 МСК"                      # для текста (опц.)
       ANCHOR_MONDAY: "2025-09-01"                  # опорный понедельник ретро-недели
     steps:
