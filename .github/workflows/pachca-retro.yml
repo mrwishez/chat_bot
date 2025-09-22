@@ -1,9 +1,9 @@
 # .github/workflows/pachca-retro-biweekly.yml
-name: Pachca Retro (biweekly Mon 14:00 MSK, buffered)
+name: Pachca Retro (biweekly Mon 14:00 MSK)
 
 on:
   schedule:
-    # 13:55 МСК = 10:55 UTC (каждый понедельник)
+    # 14:00 МСК = 11:00 UTC (каждый понедельник)
     - cron: '0 8 * * 1'
   workflow_dispatch: {}
 
@@ -11,44 +11,24 @@ jobs:
   retro:
     runs-on: ubuntu-latest
     env:
-      WEBHOOK_URL: ${{ secrets.PACHCA_WEBHOOK_URL }}  # твой вебхук Пачки
-      RETRO_TIME: "14:00 МСК"                      # для текста (опц.)
-      ANCHOR_MONDAY: "2025-09-01"                  # опорный понедельник ретро-недели
+      WEBHOOK_URL: ${{ secrets.PACHCA_WEBHOOK_URL }}   # входящий вебхук Пачки
+      ANCHOR_MONDAY: "2025-09-01"                      # понедельник первой ретро-недели
+      MSG: "@ReleaseTeam Сегодня ретро в 16:00 ЕКБ, пришло время повспоминать чем хотелось бы поделиться, ссылка на доску: https://unidraw.io/app/board/25be0ac5c3cebcef471a?elementId=ah6ZCbHO8vzu_qrMQSC5- Ссылка на подключение: https://ideco.ktalk.ru/releaseteam"
+
     steps:
-      - name: Решить, нужно ли слать, и (если нужно) собрать body.json
+      - name: Проверка секрета
+        run: |
+          [ -n "$WEBHOOK_URL" ] || { echo "PACHCA_WEBHOOK_URL не задан"; exit 1; }
+
+      - name: Решить, слать ли сообщение, и (если нужно) собрать body.json
         id: plan
         run: |
-          python3 - <<'PY'
-          import os, json
-          from datetime import datetime, timedelta, date, timezone
-
-          # МСК как UTC+3 (без переходов)
-          now_utc = datetime.now(timezone.utc)
-          msk = now_utc + timedelta(hours=3)
-
-          # текущий понедельник (МСК)
-          monday = (msk.date() - timedelta(days=msk.weekday()))
-          # опорный понедельник
-          anchor = date.fromisoformat(os.environ["ANCHOR_MONDAY"])
-          weeks = (monday - anchor).days // 7
-
-          # ретро-неделя = чётность по 2 неделям от anchor
-          should_send = int(weeks >= 0 and weeks % 2 == 0)
-
-          if should_send:
-              msg = "@ReleaseTeam Сегодня ретро в 16:00 ЕКБ, пришло время повспоминать чем хотелось бы поделиться, " \
-                    "ссылка на доску: https://unidraw.io/app/board/25be0ac5c3cebcef471a?elementId=ah6ZCbHO8vzu_qrMQSC5- " \
-                    "Ссылка на подключение: https://ideco.ktalk.ru/releaseteam"
-              with open("body.json","w", encoding="utf-8") as f:
-                  f.write(json.dumps({"message": msg}, ensure_ascii=False))
-              print("Retro week: will send.")
-          else:
-              print("Not a retro week, skip.")
-
-          # прокинем флаг в outputs
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"should_send={should_send}\n")
-          PY
+          python3 -c "import os,json; from datetime import datetime,timedelta,date,timezone; \
+now=datetime.now(timezone.utc); msk=now+timedelta(hours=3); monday=(msk.date()-timedelta(days=msk.weekday())); \
+anchor=date.fromisoformat(os.environ['ANCHOR_MONDAY']); weeks=(monday-anchor).days//7; \
+should=int(weeks>=0 and weeks%2==0); \
+open(os.environ['GITHUB_OUTPUT'],'a').write(f'should_send={should}\n'); \
+( open('body.json','w',encoding='utf-8').write(json.dumps({'message': os.environ['MSG']}, ensure_ascii=False)) ) if should else None"
 
       - name: Отправить сообщение в Пачку
         if: steps.plan.outputs.should_send == '1'
