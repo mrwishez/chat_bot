@@ -11,43 +11,39 @@ jobs:
   retro:
     runs-on: ubuntu-latest
     env:
-      WEBHOOK_URL: ${{ secrets.PACHCA_WEBHOOK_URL }}  # входящий вебхук Пачки
-      ANCHOR_MONDAY: '2025-09-01'                    # понедельник первой ретро-недели
+      WEBHOOK_URL: ${{ secrets.PACHCA_WEBHOOK_URL }}  # положи вебхук Пачки в Secrets
+      ANCHOR_MONDAY: '2025-09-01'                     # понедельник первой ретро-недели
 
     steps:
-      - name: Проверка секрета
-        run: |
-          if [ -z "$WEBHOOK_URL" ]; then
-            echo "PACHCA_WEBHOOK_URL не задан"; exit 1;
-          fi
+      - name: Check secret
+        shell: bash
+        run: '[ -n "$WEBHOOK_URL" ] || { echo "PACHCA_WEBHOOK_URL not set"; exit 1; }'
 
-      - name: Решить, ретро-неделя ли сейчас, и при необходимости собрать body.json
+      - name: Plan (decide and prepare body.json)
         id: plan
-        run: |
-          # 1) Решаем, наша ли неделя (чётность от ANCHOR_MONDAY)
-          SHOULD=$(python3 -c "import os,sys; from datetime import datetime,timedelta,date,timezone; \
-AM=os.environ['ANCHOR_MONDAY']; now=datetime.now(timezone.utc); msk=now+timedelta(hours=3); \
-monday=(msk.date()-timedelta(days=msk.weekday())); anchor=date.fromisoformat(AM); \
-weeks=(monday-anchor).days//7; print(1 if (weeks>=0 and weeks%2==0) else 0)")
-          echo "should_send=${SHOULD}" >> "$GITHUB_OUTPUT"
-
-          # 2) Если ретро-неделя — готовим JSON для отправки
+        shell: bash
+        run: >-
+          SHOULD=$(python3 -c "import os; from datetime import datetime,timedelta,date,timezone;
+          now=datetime.now(timezone.utc); msk=now+timedelta(hours=3);
+          monday=(msk.date()-timedelta(days=msk.weekday()));
+          anchor=date.fromisoformat(os.environ['ANCHOR_MONDAY']);
+          weeks=(monday-anchor).days//7;
+          print(1 if (weeks>=0 and weeks%2==0) else 0)");
+          echo "should_send=$SHOULD" >> "$GITHUB_OUTPUT";
           if [ "$SHOULD" = "1" ]; then
-            python3 -c "import json; \
-msg='@ReleaseTeam Сегодня ретро в 16:00 ЕКБ, пришло время повспоминать чем хотелось бы поделиться, ссылка на доску: https://unidraw.io/app/board/25be0ac5c3cebcef471a?elementId=ah6ZCbHO8vzu_qrMQSC5- Ссылка на подключение: https://ideco.ktalk.ru/releaseteam'; \
-open('body.json','w',encoding='utf-8').write(json.dumps({'message': msg}, ensure_ascii=False))"
-          else
-            echo "Not a retro week, skip."
+            BODY=$(python3 -c "import json; print(json.dumps({'message':'@ReleaseTeam Сегодня ретро в 16:00 ЕКБ, пришло время повспоминать чем хотелось бы поделиться, ссылка на доску: https://unidraw.io/app/board/25be0ac5c3cebcef471a?elementId=ah6ZCbHO8vzu_qrMQSC5- Ссылка на подключение: https://ideco.ktalk.ru/releaseteam'}, ensure_ascii=False))");
+            printf '%s' "$BODY" > body.json;
           fi
 
-      - name: Отправить сообщение в Пачку (только на ретро-неделе)
+      - name: Send (only on retro week)
         if: steps.plan.outputs.should_send == '1'
-        run: |
-          curl --fail --show-error --silent \
-            -H "Content-Type: application/json" \
-            -X POST "$WEBHOOK_URL" \
-            --data-binary @body.json
+        shell: bash
+        run: >-
+          curl --fail --show-error --silent
+          -H "Content-Type: application/json"
+          -X POST "$WEBHOOK_URL"
+          --data-binary @body.json
 
-      - name: Пропуск (не ретро-неделя)
+      - name: Skip (non-retro week)
         if: steps.plan.outputs.should_send != '1'
-        run: echo "Skip: not a retro week."
+        run: 'echo "Skip: not a retro week."'
