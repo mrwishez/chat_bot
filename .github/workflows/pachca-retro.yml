@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       WEBHOOK_URL: ${{ secrets.PACHCA_WEBHOOK_URL }}  # положи вебхук Пачки в Secrets
-      ANCHOR_MONDAY: '2025-09-01'                     # понедельник первой ретро-недели
+      ANCHOR_MONDAY: '2025-09-08'                     # понедельник первой ретро-недели
 
     steps:
       - name: Check secret
