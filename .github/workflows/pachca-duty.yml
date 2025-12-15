@@ -3,41 +3,96 @@ name: Pachca Weekly Duty
 
 on:
   schedule:
-    # Понедельник 08:00 МСК = 05:00 UTC
-    - cron: '0 5 * * 1'
-  workflow_dispatch: {}  # ручной запуск для теста
+    - cron: '0 5 * * 1' # Пн 08:00 МСК
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "send | next | pause | resume"
+        required: true
+        default: "send"
+      pause_until:
+        description: "YYYY-MM-DD (только для pause). Если пусто - +14 дней"
+        required: false
+      notify:
+        description: "true/false - слать сообщение сразу (для next/send)."
+        required: true
+        default: "true"
 
 jobs:
   duty:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
+      - uses: actions/checkout@v4
+
       - name: Проверка секрета вебхука
         run: |
           [ -n "${{ secrets.PACHCA_SECRETARY_URL }}" ] || { echo "PACHCA_SECRETARY_URL не задан"; exit 1; }
 
-      - name: Определить дежурного из Google Sheets
+      - name: Load/Update state
+        id: state
+        env:
+          ACTION: ${{ github.event.inputs.action }}
+          PAUSE_UNTIL: ${{ github.event.inputs.pause_until }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from datetime import datetime, timedelta, date
+          from zoneinfo import ZoneInfo
+
+          path = "duty_state.json"
+          try:
+            with open(path, "r", encoding="utf-8") as f:
+              state = json.load(f)
+          except Exception:
+            state = {"idx": 0, "pause_until": None}
+
+          action = (os.getenv("ACTION") or "send").strip().lower()
+          msk_today = datetime.now(ZoneInfo("Europe/Moscow")).date()
+
+          if action == "pause":
+            pu = (os.getenv("PAUSE_UNTIL") or "").strip()
+            if pu:
+              pause_until = date.fromisoformat(pu)
+            else:
+              pause_until = msk_today + timedelta(days=14)
+            state["pause_until"] = pause_until.isoformat()
+
+          elif action == "resume":
+            state["pause_until"] = None
+
+          elif action == "next":
+            # idx увеличим позже, когда узнаем длину списка
+            pass
+
+          with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write(f"action={action}\n")
+            f.write(f"pause_until={state.get('pause_until')}\n")
+            f.write(f"idx={state.get('idx',0)}\n")
+            f.write(f"today={msk_today.isoformat()}\n")
+          PY
+
+      - name: Определить дежурного из Google Sheets (по state.idx)
         id: who
         env:
-          # CSV-экспорт твоей таблицы (первый лист). Если лист не первый, поменяй gid.
           CSV_URL: "https://docs.google.com/spreadsheets/d/1OuZ2BMwOQhKimJ5aenuKHQZ9f-MhBKdnlkIofqUv8u8/export?format=csv&gid=0"
-
-          # Опорный понедельник, при котором 1-я строка списка = та неделя.
-          # Поставлено 2025-08-11, чтобы 2025-08-25 была 3-й строкой (Истомина).
-          ANCHOR_DATE: "2025-08-11"
+          IDX: ${{ steps.state.outputs.idx }}
+          ACTION: ${{ steps.state.outputs.action }}
         run: |
           python3 - <<'PY'
           import os, csv, io, sys, json
           from urllib.request import urlopen, Request
-          from datetime import datetime, timedelta, date
-          from zoneinfo import ZoneInfo
 
           csv_url = os.environ["CSV_URL"]
-          # грузим CSV (нужен публичный доступ "Опубликовать в интернете" или доступ по ссылке)
           req = Request(csv_url, headers={"User-Agent":"Mozilla/5.0"})
           data = urlopen(req, timeout=20).read().decode("utf-8")
           rows = list(csv.DictReader(io.StringIO(data)))
 
-          # собираем список (name, tag)
           people = []
           for r in rows:
             name = (r.get("name") or r.get("Name") or "").strip()
@@ -52,31 +107,81 @@ jobs:
             print("::error::В таблице нет валидных строк (нужны колонки 'name' и 'tag').")
             sys.exit(1)
 
-          # вычисляем текущий понедельник по МСК
-          now = datetime.now(ZoneInfo("Europe/Moscow"))
-          monday_today = (now - timedelta(days=now.weekday())).date()
+          idx = int(os.environ.get("IDX","0"))
+          idx = idx % len(people)
 
-          # опорная дата: 2025-08-11 => 2025-08-25 даст индекс 2 (третья строка)
-          try:
-            anchor_date = date.fromisoformat(os.environ.get("ANCHOR_DATE","").strip())
-          except Exception:
-            anchor_date = date(2025,8,11)
-
-          weeks = (monday_today - anchor_date).days // 7
-          if weeks < 0:
-            weeks = 0  # если опорная дата случайно в будущем
-          idx = weeks % len(people)
-
-          name, tag = people[idx]
-          # пробрасываем в outputs
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
-            f.write(f"name={name}\n")
-            f.write(f"tag={tag}\n")
+            f.write(f"len={len(people)}\n")
             f.write(f"idx={idx}\n")
-            f.write(f"monday_today={monday_today}\n")
+            f.write(f"name={people[idx][0]}\n")
+            f.write(f"tag={people[idx][1]}\n")
+          PY
+
+      - name: Apply NEXT (advance idx) and save state
+        if: ${{ steps.state.outputs.action == 'next' }}
+        env:
+          LIST_LEN: ${{ steps.who.outputs.len }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          path = "duty_state.json"
+          with open(path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+
+          n = int(os.environ["LIST_LEN"])
+          state["idx"] = (int(state.get("idx",0)) + 1) % n
+
+          with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+          PY
+
+      - name: Commit state changes
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          if git diff --quiet; then
+            echo "No state changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add duty_state.json
+          git commit -m "Update duty state"
+          git push
+
+      - name: Check pause and decide notify
+        id: gate
+        env:
+          ACTION: ${{ steps.state.outputs.action }}
+          PAUSE_UNTIL: ${{ steps.state.outputs.pause_until }}
+          TODAY: ${{ steps.state.outputs.today }}
+          NOTIFY: ${{ github.event.inputs.notify }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from datetime import date
+
+          action = (os.getenv("ACTION") or "send").strip().lower()
+          pause_until = (os.getenv("PAUSE_UNTIL") or "").strip()
+          today = date.fromisoformat(os.getenv("TODAY"))
+
+          notify = (os.getenv("NOTIFY") or "true").strip().lower() == "true"
+
+          paused = False
+          if pause_until:
+            pu = date.fromisoformat(pause_until)
+            if today <= pu:
+              paused = True
+
+          # По крону notify всегда true, но пауза режет
+          should_send = notify and (action in ("send","next")) and (not paused)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write(f"paused={'true' if paused else 'false'}\n")
+            f.write(f"should_send={'true' if should_send else 'false'}\n")
           PY
 
       - name: Отправить сообщение в Пачку
+        if: ${{ steps.gate.outputs.should_send == 'true' }}
         env:
           WEBHOOK_URL: ${{ secrets.PACHCA_SECRETARY_URL }}
           NAME: ${{ steps.who.outputs.name }}
@@ -88,8 +193,12 @@ jobs:
             -X POST "$WEBHOOK_URL" \
             -d "$BODY"
 
-      # Полезный лог для проверки индекса и дат
-      - name: Debug info (optional)
+      - name: Debug info
         run: |
-          echo "INDEX: ${{ steps.who.outputs.idx }}"
-          echo "MONDAY_TODAY(ru-MS K): ${{ steps.who.outputs.monday_today }}"
+          echo "ACTION: ${{ steps.state.outputs.action }}"
+          echo "STATE_IDX(before who): ${{ steps.state.outputs.idx }}"
+          echo "LIST_LEN: ${{ steps.who.outputs.len }}"
+          echo "WHO_IDX: ${{ steps.who.outputs.idx }}"
+          echo "PAUSE_UNTIL: ${{ steps.state.outputs.pause_until }}"
+          echo "PAUSED: ${{ steps.gate.outputs.paused }}"
+          echo "SHOULD_SEND: ${{ steps.gate.outputs.should_send }}"
