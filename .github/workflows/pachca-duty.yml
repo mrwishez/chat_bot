@@ -29,7 +29,7 @@ jobs:
 
       - name: Проверка секрета вебхука
         run: |
-          [ -n "${{ secrets.PACHCA_TEST_URL }}" ] || { echo "PACHCA_TEST_URL не задан"; exit 1; }
+          [ -n "${{ secrets.PACHKA_TEST_URL }}" ] || { echo "PACHKA_TEST_URL не задан"; exit 1; }
 
       - name: Load/Update state
         id: state
@@ -187,7 +187,7 @@ jobs:
       - name: Отправить сообщение в Пачку
         if: ${{ steps.gate.outputs.should_send == 'true' }}
         env:
-          WEBHOOK_URL: ${{ secrets.PACHCA_TEST_URL }}
+          WEBHOOK_URL: ${{ secrets.PACHKA_TEST_URL }}
           NAME: ${{ steps.who.outputs.name }}
           TAG: ${{ steps.who.outputs.tag }}
         run: |
