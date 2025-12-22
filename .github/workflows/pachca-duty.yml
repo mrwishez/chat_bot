@@ -49,6 +49,9 @@ jobs:
           except Exception:
             state = {"idx": 0, "pause_until": None}
 
+          if state.get("pause_until") in ("None", ""):
+            state["pause_until"] = None
+          
           action = (os.getenv("ACTION") or "send").strip().lower()
           msk_today = datetime.now(ZoneInfo("Europe/Moscow")).date()
 
@@ -70,6 +73,7 @@ jobs:
           with open(path, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
 
+          pause_until_out = state.get("pause_until") or ""
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
             f.write(f"action={action}\n")
             f.write(f"pause_until={state.get('pause_until')}\n")
