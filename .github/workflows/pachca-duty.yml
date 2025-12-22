@@ -166,6 +166,8 @@ jobs:
 
           action = (os.getenv("ACTION") or "send").strip().lower()
           pause_until = (os.getenv("PAUSE_UNTIL") or "").strip()
+          if pause_until.lower() == "none":
+            pause_until = ""
           today = date.fromisoformat(os.getenv("TODAY"))
 
           notify = (os.getenv("NOTIFY") or "true").strip().lower() == "true"
