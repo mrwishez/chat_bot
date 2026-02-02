@@ -140,7 +140,6 @@ jobs:
           PY
 
       - name: Commit state changes
-        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           if git diff --quiet; then
             echo "No state changes"
@@ -186,6 +185,25 @@ jobs:
             f.write(f"should_send={'true' if should_send else 'false'}\n")
           PY
 
+      - name: Auto-advance idx when message is sent
+        if: ${{ steps.gate.outputs.should_send == 'true' }}
+        env:
+          LIST_LEN: ${{ steps.who.outputs.len }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          path = "duty_state.json"
+          try:
+            with open(path, "r", encoding="utf-8") as f:
+              state = json.load(f)
+          except Exception:
+            state = {"idx": 0, "pause_until": None}
+          n = int(os.environ["LIST_LEN"])
+          state["idx"] = (int(state.get("idx", 0)) + 1) % n
+          with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+          PY
+          
       - name: Отправить сообщение в Пачку
         if: ${{ steps.gate.outputs.should_send == 'true' }}
         env:
