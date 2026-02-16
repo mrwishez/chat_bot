@@ -3,7 +3,7 @@ name: Pachca Weekly Duty
 
 on:
   schedule:
-    - cron: '0 5 * * 1' # Пн 08:00 МСК
+    - cron: '0 5 * * 1' # Пн 08:00 МСК (05:00 UTC)
   workflow_dispatch:
     inputs:
       action:
@@ -31,6 +31,7 @@ jobs:
         run: |
           [ -n "${{ secrets.PACHCA_SECRETARY_URL }}" ] || { echo "PACHCA_SECRETARY_URL не задан"; exit 1; }
 
+      # 1) Загружаем state + применяем pause/resume (idx тут не двигаем)
       - name: Load/Update state
         id: state
         env:
@@ -51,7 +52,7 @@ jobs:
 
           if state.get("pause_until") in ("None", ""):
             state["pause_until"] = None
-          
+
           action = (os.getenv("ACTION") or "send").strip().lower()
           msk_today = datetime.now(ZoneInfo("Europe/Moscow")).date()
 
@@ -66,14 +67,10 @@ jobs:
           elif action == "resume":
             state["pause_until"] = None
 
-          elif action == "next":
-            # idx увеличим позже, когда узнаем длину списка
-            pass
-
+          # next/send: пока ничего не делаем, idx сдвинем позже, когда поймём длину списка
           with open(path, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
 
-          pause_until_out = state.get("pause_until") or ""
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
             f.write(f"action={action}\n")
             f.write(f"pause_until={state.get('pause_until')}\n")
@@ -81,15 +78,15 @@ jobs:
             f.write(f"today={msk_today.isoformat()}\n")
           PY
 
+      # 2) Читаем таблицу и выбираем человека по текущему idx
       - name: Определить дежурного из Google Sheets (по state.idx)
         id: who
         env:
           CSV_URL: "https://docs.google.com/spreadsheets/d/1OuZ2BMwOQhKimJ5aenuKHQZ9f-MhBKdnlkIofqUv8u8/export?format=csv&gid=0"
           IDX: ${{ steps.state.outputs.idx }}
-          ACTION: ${{ steps.state.outputs.action }}
         run: |
           python3 - <<'PY'
-          import os, csv, io, sys, json
+          import os, csv, io, sys
           from urllib.request import urlopen, Request
 
           csv_url = os.environ["CSV_URL"]
@@ -111,8 +108,7 @@ jobs:
             print("::error::В таблице нет валидных строк (нужны колонки 'name' и 'tag').")
             sys.exit(1)
 
-          idx = int(os.environ.get("IDX","0"))
-          idx = idx % len(people)
+          idx = int(os.environ.get("IDX","0")) % len(people)
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
             f.write(f"len={len(people)}\n")
@@ -121,36 +117,7 @@ jobs:
             f.write(f"tag={people[idx][1]}\n")
           PY
 
-      - name: Apply NEXT (advance idx) and save state
-        if: ${{ steps.state.outputs.action == 'next' }}
-        env:
-          LIST_LEN: ${{ steps.who.outputs.len }}
-        run: |
-          python3 - <<'PY'
-          import json, os
-          path = "duty_state.json"
-          with open(path, "r", encoding="utf-8") as f:
-            state = json.load(f)
-
-          n = int(os.environ["LIST_LEN"])
-          state["idx"] = (int(state.get("idx",0)) + 1) % n
-
-          with open(path, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-          PY
-
-      - name: Commit state changes
-        run: |
-          if git diff --quiet; then
-            echo "No state changes"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add duty_state.json
-          git commit -m "Update duty state"
-          git push
-
+      # 3) Гейт: пауза + notify + action
       - name: Check pause and decide notify
         id: gate
         env:
@@ -158,6 +125,7 @@ jobs:
           PAUSE_UNTIL: ${{ steps.state.outputs.pause_until }}
           TODAY: ${{ steps.state.outputs.today }}
           NOTIFY: ${{ github.event.inputs.notify }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           python3 - <<'PY'
           import os
@@ -169,7 +137,12 @@ jobs:
             pause_until = ""
           today = date.fromisoformat(os.getenv("TODAY"))
 
-          notify = (os.getenv("NOTIFY") or "true").strip().lower() == "true"
+          event_name = os.getenv("EVENT_NAME") or ""
+          # по крону input'ов нет, но notify считаем true
+          if event_name == "schedule":
+            notify = True
+          else:
+            notify = (os.getenv("NOTIFY") or "true").strip().lower() == "true"
 
           paused = False
           if pause_until:
@@ -177,7 +150,6 @@ jobs:
             if today <= pu:
               paused = True
 
-          # По крону notify всегда true, но пауза режет
           should_send = notify and (action in ("send","next")) and (not paused)
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
@@ -185,26 +157,9 @@ jobs:
             f.write(f"should_send={'true' if should_send else 'false'}\n")
           PY
 
-      - name: Auto-advance idx when message is sent
-        if: ${{ steps.gate.outputs.should_send == 'true' }}
-        env:
-          LIST_LEN: ${{ steps.who.outputs.len }}
-        run: |
-          python3 - <<'PY'
-          import json, os
-          path = "duty_state.json"
-          try:
-            with open(path, "r", encoding="utf-8") as f:
-              state = json.load(f)
-          except Exception:
-            state = {"idx": 0, "pause_until": None}
-          n = int(os.environ["LIST_LEN"])
-          state["idx"] = (int(state.get("idx", 0)) + 1) % n
-          with open(path, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-          PY
-          
+      # 4) Отправка
       - name: Отправить сообщение в Пачку
+        id: sendmsg
         if: ${{ steps.gate.outputs.should_send == 'true' }}
         env:
           WEBHOOK_URL: ${{ secrets.PACHCA_SECRETARY_URL }}
@@ -217,8 +172,48 @@ jobs:
             -X POST "$WEBHOOK_URL" \
             -d "$BODY"
 
+      # 5) Сдвиг индекса:
+      # - если action=next и should_send=false (например notify=false) — тоже двигаем (ручной next без отправки)
+      # - если сообщение отправили — двигаем всегда
+      - name: Advance idx and save state
+        if: ${{ (steps.gate.outputs.should_send == 'true') || (steps.state.outputs.action == 'next') }}
+        env:
+          LIST_LEN: ${{ steps.who.outputs.len }}
+          SENT: ${{ steps.gate.outputs.should_send }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+
+          path = "duty_state.json"
+          try:
+            with open(path, "r", encoding="utf-8") as f:
+              state = json.load(f)
+          except Exception:
+            state = {"idx": 0, "pause_until": None}
+
+          n = int(os.environ["LIST_LEN"])
+          state["idx"] = (int(state.get("idx", 0)) + 1) % n
+
+          with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+          PY
+
+      # 6) Коммит — в самом конце, чтобы забрать все изменения state (pause/resume/advance)
+      - name: Commit state changes
+        run: |
+          if git diff --quiet; then
+            echo "No state changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add duty_state.json
+          git commit -m "Update duty state"
+          git push
+
       - name: Debug info
         run: |
+          echo "EVENT: ${{ github.event_name }}"
           echo "ACTION: ${{ steps.state.outputs.action }}"
           echo "STATE_IDX(before who): ${{ steps.state.outputs.idx }}"
           echo "LIST_LEN: ${{ steps.who.outputs.len }}"
@@ -226,3 +221,5 @@ jobs:
           echo "PAUSE_UNTIL: ${{ steps.state.outputs.pause_until }}"
           echo "PAUSED: ${{ steps.gate.outputs.paused }}"
           echo "SHOULD_SEND: ${{ steps.gate.outputs.should_send }}"
+          echo "STATE_AFTER:"
+          cat duty_state.json || true
