@@ -2,8 +2,8 @@
 name: Pachca Weekly Duty
 
 on:
-  schedule:
-    - cron: '0 5 * * 1' # Пн 08:00 МСК (05:00 UTC)
+  #schedule:
+  #  - cron: '0 5 * * 1' # Пн 08:00 МСК (05:00 UTC)
   workflow_dispatch:
     inputs:
       action:
